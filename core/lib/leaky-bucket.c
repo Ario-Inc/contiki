@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, Hasso-Plattner-Institut.
+ * Copyright (c) 2017, Hasso-Plattner-Institut.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -32,13 +32,12 @@
 
 /**
  * \file
- *         An OFB-AES-128-based CSPRNG.
+ *         Leaky Bucket Counter (LBC)
  * \author
  *         Konrad Krentz <konrad.krentz@gmail.com>
  */
 
-#include "lib/csprng.h"
-#include "lib/aes-128.h"
+#include "lib/leaky-bucket.h"
 #include "sys/cc.h"
 #include <string.h>
 
@@ -50,46 +49,59 @@
 #define PRINTF(...)
 #endif /* DEBUG */
 
-static struct csprng_seed seed;
-
 /*---------------------------------------------------------------------------*/
-/*
- * We use output feedback mode (OFB) for generating cryptographic pseudo-random
- * numbers [RFC 4086]. A potential problem with OFB is that OFB at some point
- * enters a cycle. However, the expected cycle length given a random key and a
- * random starting point is about 2^127 in our instantiation [Davies and Parkin,
- * The Average Cycle Size of The Key Stream in Output  Feedback Encipherment].
- */
-void
-csprng_rand(uint8_t *result, uint8_t len)
+static void
+leak(void *ptr)
 {
-  uint16_t pos;
+  struct leaky_bucket *lb;
 
-  AES_128.set_key(seed.key);
-  for(pos = 0; pos < len; pos += 16) {
-    AES_128.encrypt(seed.state);
-    memcpy(result + pos, seed.state, MIN(len - pos, 16));
+  lb = (struct leaky_bucket *) ptr;
+  lb->filling_level--;
+
+  PRINTF("leaky-bucket#leak: (%p) filling_level = %i\n",
+      lb, lb->filling_level);
+
+  if(lb->filling_level) {
+    ctimer_reset(&lb->leakage_timer);
   }
 }
 /*---------------------------------------------------------------------------*/
 void
-csprng_init(void)
+leaky_bucket_init(struct leaky_bucket *lb,
+    uint16_t capacity,
+    clock_time_t leakage_duration)
 {
-  CSPRNG_SEEDER.generate_seed(&seed);
-#if DEBUG
-  uint8_t i;
+  PRINTF("leaky-bucket#init: (%p) capacity = %i; leakage_duration = %lus\n",
+      lb, capacity, leakage_duration / CLOCK_SECOND);
+  memset(lb, 0, sizeof(struct leaky_bucket));
+  lb->capacity = capacity;
+  lb->leakage_duration = leakage_duration;
+}
+/*---------------------------------------------------------------------------*/
+void
+leaky_bucket_pour(struct leaky_bucket *lb, uint16_t drop_size)
+{
+  lb->filling_level = MIN(lb->filling_level + drop_size, lb->capacity);
 
-  PRINTF("csprng: seeder = %s\n", CSPRNG_SEEDER.name);
-  PRINTF("csprng: key = ");
-  for(i = 0; i < CSPRNG_KEY_LEN; i++) {
-    PRINTF("%02x", seed.key[i]);
+  PRINTF("leaky-bucket#pour: (%p) filling_level = %i\n",
+      lb, lb->filling_level);
+
+  if(!ctimer_expired(&lb->leakage_timer)) {
+    /* already scheduled */
+    return;
   }
-  PRINTF("\n");
-  PRINTF("csprng: state = ");
-  for(i = 0; i < CSPRNG_STATE_LEN; i++) {
-    PRINTF("%02x", seed.state[i]);
+
+  if(!lb->filling_level) {
+    /* nothing to leak */
+    return;
   }
-  PRINTF("\n");
-#endif
+
+  ctimer_set(&lb->leakage_timer, lb->leakage_duration, leak, lb);
+}
+/*---------------------------------------------------------------------------*/
+int
+leaky_bucket_is_full(struct leaky_bucket *lb)
+{
+  return lb->filling_level == lb->capacity;
 }
 /*---------------------------------------------------------------------------*/

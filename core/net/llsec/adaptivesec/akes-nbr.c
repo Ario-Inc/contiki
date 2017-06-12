@@ -93,7 +93,6 @@ static void
 on_entry_change(struct akes_nbr_entry *entry)
 {
   if(!entry->permanent && !entry->tentative) {
-    nbr_table_unlock(entries_table, entry);
     nbr_table_remove(entries_table, entry);
   }
 }

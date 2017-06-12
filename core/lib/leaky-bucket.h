@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, Hasso-Plattner-Institut.
+ * Copyright (c) 2017, Hasso-Plattner-Institut.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -32,64 +32,42 @@
 
 /**
  * \file
- *         An OFB-AES-128-based CSPRNG.
+ *         Leaky bucket implementation.
  * \author
  *         Konrad Krentz <konrad.krentz@gmail.com>
  */
 
-#include "lib/csprng.h"
-#include "lib/aes-128.h"
-#include "sys/cc.h"
-#include <string.h>
+#ifndef LEAKY_BUCKET_H_
+#define LEAKY_BUCKET_H_
 
-#define DEBUG 0
-#if DEBUG
-#include <stdio.h>
-#define PRINTF(...) printf(__VA_ARGS__)
-#else /* DEBUG */
-#define PRINTF(...)
-#endif /* DEBUG */
+#include "contiki.h"
+#include "sys/ctimer.h"
 
-static struct csprng_seed seed;
+struct leaky_bucket {
+  uint16_t capacity;
+  clock_time_t leakage_duration;
+  uint16_t filling_level;
+  struct ctimer leakage_timer;
+};
 
-/*---------------------------------------------------------------------------*/
-/*
- * We use output feedback mode (OFB) for generating cryptographic pseudo-random
- * numbers [RFC 4086]. A potential problem with OFB is that OFB at some point
- * enters a cycle. However, the expected cycle length given a random key and a
- * random starting point is about 2^127 in our instantiation [Davies and Parkin,
- * The Average Cycle Size of The Key Stream in Output  Feedback Encipherment].
+/**
+ * \param lb pointer the bucket in question
+ * \param capacity number of drops that fit into the bucket
+ * \param leakage_duration how long it takes until one drop leaks
  */
-void
-csprng_rand(uint8_t *result, uint8_t len)
-{
-  uint16_t pos;
+void leaky_bucket_init(struct leaky_bucket *lb,
+    uint16_t capacity,
+    clock_time_t leakage_duration);
 
-  AES_128.set_key(seed.key);
-  for(pos = 0; pos < len; pos += 16) {
-    AES_128.encrypt(seed.state);
-    memcpy(result + pos, seed.state, MIN(len - pos, 16));
-  }
-}
-/*---------------------------------------------------------------------------*/
-void
-csprng_init(void)
-{
-  CSPRNG_SEEDER.generate_seed(&seed);
-#if DEBUG
-  uint8_t i;
+/**
+ * \brief pours a drop in the bucket
+ */
+void leaky_bucket_pour(struct leaky_bucket *lb,
+    uint16_t drop_size);
 
-  PRINTF("csprng: seeder = %s\n", CSPRNG_SEEDER.name);
-  PRINTF("csprng: key = ");
-  for(i = 0; i < CSPRNG_KEY_LEN; i++) {
-    PRINTF("%02x", seed.key[i]);
-  }
-  PRINTF("\n");
-  PRINTF("csprng: state = ");
-  for(i = 0; i < CSPRNG_STATE_LEN; i++) {
-    PRINTF("%02x", seed.state[i]);
-  }
-  PRINTF("\n");
-#endif
-}
-/*---------------------------------------------------------------------------*/
+/**
+ * \return whether the bucket is full
+ */
+int leaky_bucket_is_full(struct leaky_bucket *lb);
+
+#endif /* LEAKY_BUCKET_H_ */
